@@ -53,6 +53,7 @@
 #include <log_utils.h>
 #endif
 
+bool noise_mic_state = false;
 #define SOUND_TRIGGER_DEVICE_HANDSET_MONO_LOW_POWER_ACDB_ID (100)
 #define MIXER_FILE_DELIMITER "_"
 #define MIXER_FILE_EXT ".xml"
@@ -151,7 +152,7 @@
 #define AUDIO_PARAMETER_KEY_VOLUME_BOOST  "volume_boost"
 #define AUDIO_PARAMETER_KEY_AUD_CALDATA   "cal_data"
 #define AUDIO_PARAMETER_KEY_AUD_CALRESULT "cal_result"
-
+#define AUDIO_PARAMETER_KEY_NOISE_MIC   "noise_mic"
 #define AUDIO_PARAMETER_KEY_MONO_SPEAKER "mono_speaker"
 
 #define AUDIO_PARAMETER_KEY_FLUENCE_TYPE        "fluence_type"
@@ -587,6 +588,7 @@ static const char * const device_table[SND_DEVICE_MAX] = {
     [SND_DEVICE_OUT_SPEAKER_WSA_AND_BT_SCO_SWB] = "wsa-speaker-and-bt-sco-wb",
     [SND_DEVICE_OUT_VOICE_HEARING_AID] = "hearing-aid",
     [SND_DEVICE_OUT_BUS_MEDIA] = "bus-speaker",
+    [SND_DEVICE_OUT_SPEAKER_TFA] = "voice-speaker-qrd",
     [SND_DEVICE_OUT_BUS_SYS] = "bus-speaker",
     [SND_DEVICE_OUT_BUS_NAV] = "bus-speaker",
     [SND_DEVICE_OUT_BUS_PHN] = "bus-speaker",
@@ -701,6 +703,7 @@ static const char * const device_table[SND_DEVICE_MAX] = {
     [SND_DEVICE_IN_SPEAKER_TMIC_NS] = "speaker-tmic",
     [SND_DEVICE_IN_SPEAKER_TMIC_AEC_NS] = "speaker-tmic",
     [SND_DEVICE_IN_VOICE_REC_TMIC] = "three-mic",
+    [SND_DEVICE_IN_NOISE_MIC] = "noise-mic",
     [SND_DEVICE_IN_UNPROCESSED_MIC] = "unprocessed-mic",
     [SND_DEVICE_IN_UNPROCESSED_STEREO_MIC] = "unprocessed-stereo-mic",
     [SND_DEVICE_IN_UNPROCESSED_THREE_MIC] = "unprocessed-three-mic",
@@ -967,6 +970,7 @@ static int acdb_device_table[SND_DEVICE_MAX] = {
     [SND_DEVICE_IN_SPEAKER_TMIC_NS] = 159,
     [SND_DEVICE_IN_SPEAKER_TMIC_AEC_NS] = 160,
     [SND_DEVICE_IN_VOICE_REC_TMIC] = 125,
+    [SND_DEVICE_IN_NOISE_MIC] = 4,
     [SND_DEVICE_IN_UNPROCESSED_MIC] = 143,
     [SND_DEVICE_IN_UNPROCESSED_STEREO_MIC] = 144,
     [SND_DEVICE_IN_UNPROCESSED_THREE_MIC] = 145,
@@ -1088,6 +1092,7 @@ static struct name_to_index snd_device_name_index[SND_DEVICE_MAX] = {
     {TO_NAME_INDEX(SND_DEVICE_OUT_VOIP_HEADPHONES)},
     {TO_NAME_INDEX(SND_DEVICE_OUT_VOICE_HEARING_AID)},
     {TO_NAME_INDEX(SND_DEVICE_OUT_BUS_MEDIA)},
+    {TO_NAME_INDEX(SND_DEVICE_OUT_SPEAKER_TFA)},
     {TO_NAME_INDEX(SND_DEVICE_OUT_BUS_SYS)},
     {TO_NAME_INDEX(SND_DEVICE_OUT_BUS_NAV)},
     {TO_NAME_INDEX(SND_DEVICE_OUT_BUS_PHN)},
@@ -1201,6 +1206,7 @@ static struct name_to_index snd_device_name_index[SND_DEVICE_MAX] = {
     {TO_NAME_INDEX(SND_DEVICE_IN_SPEAKER_TMIC_NS)},
     {TO_NAME_INDEX(SND_DEVICE_IN_SPEAKER_TMIC_AEC_NS)},
     {TO_NAME_INDEX(SND_DEVICE_IN_VOICE_REC_TMIC)},
+    {TO_NAME_INDEX(SND_DEVICE_IN_NOISE_MIC)},
     {TO_NAME_INDEX(SND_DEVICE_IN_UNPROCESSED_MIC)},
     {TO_NAME_INDEX(SND_DEVICE_IN_UNPROCESSED_STEREO_MIC)},
     {TO_NAME_INDEX(SND_DEVICE_IN_UNPROCESSED_THREE_MIC)},
@@ -2104,6 +2110,8 @@ static void set_platform_defaults(struct platform_data * my_data)
     backend_tag_table[SND_DEVICE_OUT_BT_SCO_SWB] = strdup("bt-sco-swb");
     backend_tag_table[SND_DEVICE_OUT_HDMI] = strdup("hdmi");
     backend_tag_table[SND_DEVICE_OUT_SPEAKER_AND_HDMI] = strdup("speaker-and-hdmi");
+    backend_tag_table[SND_DEVICE_OUT_SPEAKER] = strdup("speaker");
+    backend_tag_table[SND_DEVICE_OUT_VOICE_SPEAKER] = strdup("voice-speaker");
     backend_tag_table[SND_DEVICE_OUT_DISPLAY_PORT] = strdup("display-port");
     backend_tag_table[SND_DEVICE_OUT_SPEAKER_AND_DISPLAY_PORT] = strdup("speaker-and-display-port");
     backend_tag_table[SND_DEVICE_OUT_VOICE_TX] = strdup("afe-proxy");
@@ -6854,9 +6862,12 @@ snd_device_t platform_get_input_snd_device(void *platform,
             else if ((my_data->fluence_type & (FLUENCE_DUAL_MIC | FLUENCE_TRI_MIC | FLUENCE_QUAD_MIC)) &&
                     (channel_count == 2) && (my_data->source_mic_type & SOURCE_DUAL_MIC))
                 snd_device = SND_DEVICE_IN_HANDSET_DMIC_STEREO;
-            else
+            else if (!noise_mic_state)
                 snd_device = my_data->fluence_sb_enabled ? SND_DEVICE_IN_HANDSET_MIC_SB
                                  : SND_DEVICE_IN_HANDSET_MIC;
+            else {
+                snd_device = SND_DEVICE_IN_NOISE_MIC;
+            }
         } else if (in_device & AUDIO_DEVICE_IN_BACK_MIC) {
             if ((my_data->source_mic_type & SOURCE_DUAL_MIC) &&
                     channel_count == 2)
@@ -7522,6 +7533,17 @@ int platform_set_parameters(void *platform, struct str_parms *parms)
         } else {
             ALOGV("%s: HD Voice already set to %d", __func__, state);
         }
+    }
+
+    err = str_parms_get_str(parms, AUDIO_PARAMETER_KEY_NOISE_MIC, value, sizeof(value));
+    if (err >= 0) {
+        noise_mic_state = false;
+        if (!strncmp("on", value, sizeof("on")))
+            noise_mic_state = true;
+        else
+            noise_mic_state = false;
+            str_parms_del(parms,AUDIO_PARAMETER_KEY_NOISE_MIC);
+            ALOGD("sim:noise_mic_state is %d",noise_mic_state);
     }
 
     err = str_parms_get_str(parms, AUDIO_PARAMETER_KEY_VOLUME_BOOST,
